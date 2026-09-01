@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cadence"
+dynamic = ["version"]
+description = "Measure the shape of someone's sentences, then rewrite a draft to match without inventing facts."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "José Miguel" }]
+keywords = ["nlp", "syntax", "parsing", "writing", "style", "spacy", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = ["spacy>=3.8,<3.9"]
+
+[project.optional-dependencies]
+llm = ["anthropic>=1.0"]
+dev = ["pytest>=8", "ruff>=0.6", "build", "cadence[llm]"]
+
+[project.scripts]
+cadence = "cadence.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/josemiguel/cadence"
+Repository = "https://github.com/josemiguel/cadence"
+
+[tool.hatch.version]
+path = "cadence/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cadence"]
+
+[tool.hatch.build.targets.sdist]
+include = ["cadence", "tests", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not network'"
+markers = ["network: hits the Anthropic API and is skipped by default"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
