@@ -175,3 +175,28 @@ def test_a_whitespace_only_key_counts_as_missing(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "  \n")
     with pytest.raises(MissingAPIKey):
         resolve_client()
+
+
+def test_restyle_instruction_forbids_reaching_length_by_adding(fake_client, profile):
+    client = fake_client("The pricing held and nobody expected it.")
+    generate("The pricing held. Nobody expected it.", mode="profile", profile=profile,
+             task="restyle", client=client)
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "HARD LIMIT" in prompt and "merging or splitting" in prompt
+    assert "2 sentences" in prompt
+    assert "NEVER BY ADDING" in client.calls[0]["system"]
+
+
+def test_when_no_attempt_passes_the_most_faithful_one_is_returned(fake_client, profile):
+    """A visitor sees one attempt. It should be the least wrong, not the first."""
+    source = "Halvorsen Dairy did not renew the 2024-03-11 contract. Revenue fell 12%."
+    invented_first = ("Halvorsen Dairy did not renew the 2024-03-11 contract, which Ann Lee "
+                      "had negotiated in Copenhagen, and revenue fell 12% across Denmark.")
+    padded_second = (source + " This is a serious structural problem for the sector, "
+                     "reflecting deeper competitive dynamics and raising questions.")
+    client = fake_client([invented_first, padded_second, padded_second])
+    r = generate(source, mode="profile_verify", profile=profile, task="restyle",
+                 iterations=2, client=client)
+    assert not r.fidelity.passed
+    assert r.text == padded_second, "padding is less wrong than a fabricated person"
+    assert not r.fidelity.introduced

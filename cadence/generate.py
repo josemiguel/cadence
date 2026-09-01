@@ -105,7 +105,12 @@ B. INVENT NOTHING. No new examples, no new figures, no elaboration, no added
    analysis. If the source is thin, the output is thin.
 C. MATCH THE LENGTH. Stay within about 15% of the source's token count. Being
    structurally perfect at three times the length is a failure, not a success.
-D. Drop nothing either. Every point in the source must survive."""
+D. Drop nothing either. Every point in the source must survive.
+E. CHANGE SHAPE BY MERGING AND SPLITTING, NEVER BY ADDING. If the target calls
+   for longer sentences than the source has, reach them by joining source
+   sentences with subordination and coordination. If it calls for shorter
+   ones, split. A sentence that reaches the target length by saying something
+   the source did not say is wrong, however well it scores."""
 
 
 # Extended thinking is on by default and its tokens count against max_tokens, so
@@ -120,6 +125,11 @@ def _token_count(text: str) -> int:
     """Content tokens, counted the same way the profile counts them."""
     from .syntax import parse
     return len([t for t in parse(text) if not t.is_space and not t.is_punct])
+
+
+def _sentence_count(text: str) -> int:
+    from .syntax import parse
+    return sum(1 for s in parse(text).sents if s.text.strip())
 
 
 def _fidelity_of(brief: str, text: str, restyling: bool):
@@ -228,11 +238,18 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
                     f"{why}, so it is not reproduced"
                 )
     if restyling:
+        lo = int(source_tokens * (1 - LENGTH_TOLERANCE))
+        hi = int(source_tokens * (1 + LENGTH_TOLERANCE))
+        source_sentences = _sentence_count(brief)
         instruction = (
-            f"TEXT TO RESTYLE ({source_tokens} content tokens -- your output must be "
-            f"within about 15% of that):\n\n{brief}\n\n"
+            f"TEXT TO RESTYLE ({source_tokens} content tokens in {source_sentences} "
+            f"sentences):\n\n{brief}\n\n"
             "Re-render this text so its SYNTAX matches the specification. Keep every "
-            "fact, every number and every name. Add nothing. Match the length."
+            "fact, every number and every name. Add nothing.\n"
+            f"HARD LIMIT: the output must be between {lo} and {hi} content tokens. "
+            "Reach the target sentence shapes by merging or splitting the sentences "
+            "above, not by adding material. Every sentence you write must be "
+            "traceable to one or more sentences in the source."
         )
     else:
         instruction = f"BRIEF -- write about this:\n{brief}"
@@ -342,6 +359,20 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
         better = new_result["similarity"] > result["similarity"]
         if acceptable(new_text, new_fid) and (better or not acceptable(text, fid)):
             text, result, fid = new_text, new_result, new_fid
+
+    # If nothing cleared the gate, hand back the attempt that kept the most
+    # content rather than whichever happened to come first. The reader is going
+    # to see one of these; it should be the least wrong one, and the fidelity
+    # score is the measure of wrong that matters here.
+    if restyling and fid is not None and not acceptable(text, fid):
+        scored = [a for a in attempts if a.fidelity is not None]
+        if scored:
+            best = max(scored, key=lambda a: (a.fidelity.score,
+                                              -abs(_token_count(a.text) / source_tokens - 1.0)
+                                              if source_tokens else 0.0))
+            if best.text != text:
+                text, fid = best.text, best.fidelity
+                result = _measure(text, profile)
 
     return GenerationResult(
         mode="profile_verify", model=model, text=text,
