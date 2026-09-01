@@ -49,7 +49,11 @@ def resolve_client(api_key: str | None = None, client=None):
     """
     if client is not None:
         return client
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    # Secrets arrive newline-terminated more often than not: a file, a
+    # `gcloud secrets versions add --data-file=-`, a heredoc. An HTTP header
+    # cannot carry the newline, and the failure it produces is a connection
+    # error with the key printed inside it, which is the worst of both worlds.
+    key = (api_key or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not key:
         raise MissingAPIKey(
             "No Anthropic credentials. Pass api_key=, pass client=, or set "

@@ -157,3 +157,21 @@ def test_composing_from_a_topic_has_no_fidelity_score(fake_client, profile):
     r = generate("write about pricing", mode="profile", profile=profile,
                  task="compose", client=fake_client("Some prose about pricing."))
     assert r.fidelity is None, "there is no source to be faithful to"
+
+
+def test_a_newline_terminated_key_is_cleaned_before_use(install_fake_anthropic):
+    """Secret stores hand keys over with a trailing newline more often than not.
+
+    Left in, it becomes an illegal HTTP header and surfaces as a connection
+    error with the key printed inside the exception, which is the worst of
+    both worlds.
+    """
+    client = install_fake_anthropic("x", key=None)
+    resolve_client(api_key="sk-from-a-file\n")
+    assert client.api_key == "sk-from-a-file"
+
+
+def test_a_whitespace_only_key_counts_as_missing(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "  \n")
+    with pytest.raises(MissingAPIKey):
+        resolve_client()
