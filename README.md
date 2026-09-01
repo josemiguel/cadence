@@ -28,7 +28,7 @@ own fabrication, so `fidelity.py` now checks it mechanically.
 ## Install
 
 ```bash
-pip install "cadence[llm]"
+pip install "cadence-writer[llm]"   # the import name is `cadence`
 cadence download-model
 ```
 

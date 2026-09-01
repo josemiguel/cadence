@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cadence"
+name = "cadence-writer"
 dynamic = ["version"]
 description = "Measure the shape of someone's sentences, then rewrite a draft to match without inventing facts."
 readme = "README.md"
@@ -25,7 +25,7 @@ dependencies = ["spacy>=3.8,<3.9"]
 
 [project.optional-dependencies]
 llm = ["anthropic>=1.0"]
-dev = ["pytest>=8", "ruff>=0.6", "build", "cadence[llm]"]
+dev = ["pytest>=8", "ruff>=0.6", "build", "cadence-writer[llm]"]
 
 [project.scripts]
 cadence = "cadence.cli:main"
