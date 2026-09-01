@@ -204,6 +204,15 @@ def _cmd_score(args) -> int:
     return _emit("\n".join(lines), args.out)
 
 
+def _cmd_mcp(args) -> int:
+    try:
+        from .mcp_server import main as serve
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_BAD_INPUT
+    return serve()
+
+
 def _cmd_download_model(args) -> int:
     from spacy.cli import download
 
@@ -300,6 +309,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("download-model", "install the spaCy model this package needs",
         _cmd_download_model)
+
+    add("mcp", "serve cadence as a local MCP server on stdio", _cmd_mcp)
     return ap
 
 

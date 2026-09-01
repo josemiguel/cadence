@@ -13,7 +13,7 @@ Importing this package does not load the spaCy model. The first call to
 `parse`, `analyze` or `build_profile` does.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .demo import DEMO_TEXT
 from .diagnostics import Analysis, Finding, Observation, analyze

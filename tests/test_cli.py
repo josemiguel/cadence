@@ -38,7 +38,7 @@ def test_every_subcommand_is_registered():
     actions = [a for a in build_parser()._actions if hasattr(a, "choices") and a.choices]
     names = set(actions[0].choices)
     assert names == {"analyze", "render", "rewrite", "report", "profile",
-                     "restyle", "compose", "score", "download-model"}
+                     "restyle", "compose", "score", "download-model", "mcp"}
 
 
 def test_version_is_reported(capsys):

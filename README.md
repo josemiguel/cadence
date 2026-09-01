@@ -58,6 +58,27 @@ result.fidelity.score      # content kept, 0 to 100
 result.fidelity.introduced # anything invented, which should be empty
 ```
 
+## As an MCP server
+
+```bash
+pip install "cadence-writer[mcp]"
+cadence mcp
+```
+
+That serves the library over stdio for Claude Desktop, Claude Code, or any other
+MCP client, so a model can measure a voice, restyle a draft, and check fidelity
+as tools. Nothing leaves the machine except the model call the restyle tool
+makes. In Claude Code:
+
+```bash
+claude mcp add cadence -- cadence mcp
+```
+
+Tools: `measure_voice`, `analyze_text`, `restyle`, `check_fidelity`, `score`,
+`repair_structure`. Each is one library function with its arguments flattened;
+where a tool takes a corpus, it takes the documents themselves, so the server
+holds no state a client has to manage.
+
 ## Two numbers, and what neither can tell you
 
 **Voice match** compares sentence shape against the corpus: length, embedding

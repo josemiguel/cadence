@@ -25,7 +25,8 @@ dependencies = ["spacy>=3.8,<3.9"]
 
 [project.optional-dependencies]
 llm = ["anthropic>=1.0"]
-dev = ["pytest>=8", "ruff>=0.6", "build", "cadence-writer[llm]"]
+mcp = ["mcp>=1.2", "cadence-writer[llm]"]
+dev = ["pytest>=8", "ruff>=0.6", "build", "cadence-writer[llm,mcp]"]
 
 [project.scripts]
 cadence = "cadence.cli:main"
