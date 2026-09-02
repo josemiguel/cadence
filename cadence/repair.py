@@ -1,5 +1,9 @@
 """Parse repairs for note-register English.
 
+Only the ISO-date repair applies to Spanish and Portuguese parses. The rest are
+corrections to specific English misreadings, and applying them to another
+language would repair what was not broken.
+
 `en_core_web_sm` is trained on newswire and makes two errors that matter a lot
 for note-register prose, both verified against a hand-checked corpus:
 
@@ -23,6 +27,8 @@ import re
 
 from spacy.tokens import Doc
 
+from .languages import is_finite
+
 ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # Hyphenated compounds (`Deal-team`, `post-visit`, `deal-team`) are single words
 # in this register; the default tokenizer splits them on the hyphen infix.
@@ -33,8 +39,6 @@ VERB_AMBIGUOUS_NOUNS = {
     "read", "call", "take", "view", "pass", "lead", "check", "flag", "focus",
     "raise", "spend", "build", "look", "sense", "hold", "run", "cut", "bet",
 }
-
-_FINITE_TAGS = {"VBZ", "VBD", "VBP", "MD"}
 
 if not Doc.has_extension("repairs"):
     Doc.set_extension("repairs", default=None)
@@ -57,10 +61,11 @@ def install_tokenizer_rules(nlp) -> None:
 
 
 def _retag_iso_dates(doc: Doc, log: list[str]) -> None:
+    want = "CD" if doc.lang_ == "en" else "NUM"
     for tok in doc:
-        if ISO_DATE.match(tok.text) and tok.tag_ != "CD":
-            log.append(f"R1 retag {tok.text!r}: {tok.tag_} -> CD")
-            tok.tag_ = "CD"
+        if ISO_DATE.match(tok.text) and tok.tag_ != want:
+            log.append(f"R1 retag {tok.text!r}: {tok.tag_} -> {want}")
+            tok.tag_ = want
             tok.pos_ = "NUM"
 
 
@@ -75,7 +80,7 @@ def _repair_compound_heads(doc: Doc, log: list[str]) -> None:
             continue
         head = tok.head
         # The real verb must be finite and must follow the misparsed noun.
-        if head.tag_ not in _FINITE_TAGS or head.i <= tok.i:
+        if not is_finite(head) or head.i <= tok.i:
             continue
 
         log.append(f"R2 {tok.text!r} (i={tok.i}): {tok.tag_}/{tok.dep_} -> "
@@ -180,6 +185,9 @@ def apply(doc: Doc) -> Doc:
     """Run every repair, recording what fired on `doc._.repairs`."""
     log: list[str] = []
     _retag_iso_dates(doc, log)
+    if doc.lang_ != "en":
+        doc._.repairs = log
+        return doc
     _repair_compound_heads(doc, log)
     _repair_nominal_subjects(doc, log)
     _repair_pronominal_one(doc, log)
@@ -195,7 +203,7 @@ def confidence(sent) -> tuple[str, list[str]]:
     Not a probability -- a list of structural reasons to distrust the parse.
     """
     reasons = []
-    if not any(t.tag_ in _FINITE_TAGS for t in sent):
+    if not any(is_finite(t) for t in sent):
         reasons.append("no finite verb: fragment, or the head noun was read as a verb")
     for tok in sent:
         if tok.lower_ in VERB_AMBIGUOUS_NOUNS and tok.pos_ in {"VERB", "AUX"}:

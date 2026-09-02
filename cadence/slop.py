@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 import statistics
 
+from .languages import is_finite
+
 # Rule 2 -- rhetorical framing.
 RHETORICAL = [
     "zoom out", "step back", "big picture", "at a high level",
@@ -212,7 +214,7 @@ def detect(doc, Finding) -> list:
         n = lengths[i - 1]
         if n == 0 or n > APPLAUSE_MAX_TOKENS:
             continue
-        has_finite = any(t.tag_ in {"VBZ", "VBD", "VBP", "MD"} for t in sent)
+        has_finite = any(is_finite(t) for t in sent)
         has_subordination = any(
             t.dep_ in {"advcl", "ccomp", "relcl", "acl", "xcomp"} for t in sent)
         prev_len = lengths[i - 2] if i >= 2 else 0

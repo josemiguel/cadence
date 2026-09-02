@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, languages
 from .diagnostics import analyze
 from .errors import MissingAPIKey, ModelNotInstalled
 from .generate import compare, generate
@@ -57,14 +57,14 @@ def _emit(text: str, out: str | None) -> int:
 
 def _corpus(args):
     docs = _read_all(args.corpus)
-    prof = build_profile(docs, name=args.name or Path(args.corpus[0]).stem)
+    prof = build_profile(docs, name=args.name or Path(args.corpus[0]).stem, lang=args.lang)
     return docs, prof
 
 
 # --- commands --------------------------------------------------------------
 
 def _cmd_analyze(args) -> int:
-    a = analyze(_read_all([args.source])[0])
+    a = analyze(_read_all([args.source])[0], lang=args.lang)
     if args.json:
         return _emit(json.dumps({
             "metrics": a.metrics,
@@ -76,7 +76,7 @@ def _cmd_analyze(args) -> int:
 
 
 def _cmd_render(args) -> int:
-    a = analyze(_read_all([args.source])[0])
+    a = analyze(_read_all([args.source])[0], lang=args.lang)
     return _emit(render_trees(a, only_with_findings=not args.all_sentences), args.out)
 
 
@@ -98,7 +98,7 @@ def _rewrite_result(args, analysis):
 
 
 def _cmd_rewrite(args) -> int:
-    a = analyze(_read_all([args.source])[0])
+    a = analyze(_read_all([args.source])[0], lang=args.lang)
     r = _rewrite_result(args, a)
     if args.json:
         return _emit(json.dumps(_rewrite_payload(a, r), indent=2, ensure_ascii=False), args.out)
@@ -106,7 +106,7 @@ def _cmd_rewrite(args) -> int:
 
 
 def _cmd_report(args) -> int:
-    a = analyze(_read_all([args.source])[0])
+    a = analyze(_read_all([args.source])[0], lang=args.lang)
     r = _rewrite_result(args, a)
     if args.json:
         return _emit(json.dumps(_rewrite_payload(a, r), indent=2, ensure_ascii=False), args.out)
@@ -144,10 +144,11 @@ def _generation(args, task: str) -> int:
     brief = _read_all([args.source])[0]
     if args.mode == "compare":
         results = compare(brief, prof, docs, model=args.model,
-                          iterations=args.iterations, task=task)
+                          iterations=args.iterations, task=task, lang=args.lang)
     else:
         results = [generate(brief, mode=args.mode, profile=prof, samples=docs,
-                            model=args.model, iterations=args.iterations, task=task)]
+                            model=args.model, iterations=args.iterations, task=task,
+                            lang=args.lang)]
     if args.json:
         return _emit(json.dumps([{
             "mode": r.mode, "similarity": r.similarity, "text": r.text,
@@ -216,10 +217,12 @@ def _cmd_mcp(args) -> int:
 def _cmd_download_model(args) -> int:
     from spacy.cli import download
 
-    from .syntax import MODEL
-
-    print(f"downloading spaCy model {MODEL}...", file=sys.stderr)
-    download(MODEL)
+    codes = list(languages.CODES) if "all" in args.lang else list(dict.fromkeys(args.lang))
+    for code in codes:
+        model = languages.get(code).model
+        print(f"downloading spaCy model {model} ({languages.get(code).name})...",
+              file=sys.stderr)
+        download(model)
     return EXIT_OK
 
 
@@ -239,8 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=func)
         return p
 
+    def add_lang(p):
+        p.add_argument("--lang", default=languages.DEFAULT, choices=list(languages.CODES),
+                       help="language of the text and corpus (default en)")
+
     def add_text(p):
         p.add_argument("source", help="file to read, or - for stdin")
+        add_lang(p)
 
     def add_corpus(p):
         p.add_argument("--corpus", nargs="+", required=True,
@@ -289,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("corpus", nargs="+", help="files to measure")
     p.add_argument("--name", help="a label for the corpus")
     p.add_argument("--json", action="store_true")
+    add_lang(p)
 
     p = add("restyle", "re-render a text in the corpus's structure", _cmd_restyle)
     add_text(p)
@@ -307,8 +316,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the text this one was rewritten from, for the fidelity score")
     p.add_argument("--json", action="store_true")
 
-    add("download-model", "install the spaCy model this package needs",
-        _cmd_download_model)
+    p = add("download-model", "install the spaCy model(s) this package needs",
+            _cmd_download_model)
+    p.add_argument("--lang", nargs="+", default=[languages.DEFAULT],
+                   choices=[*languages.CODES, "all"],
+                   help="which language model(s) to install (default en; `all` for every one)")
 
     add("mcp", "serve cadence as a local MCP server on stdio", _cmd_mcp)
     return ap

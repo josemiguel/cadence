@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 
+from . import languages
 from .syntax import parse
 
 # --- thresholds ------------------------------------------------------------
@@ -56,33 +57,26 @@ INTRODUCED_PENALTY_CAP = 45.0
 DERIVATION_PREFIX = 4
 DERIVATION_COVERAGE = 0.6
 
+# The English model's labels, then the ones the Spanish and Portuguese models use.
 _ENTITY_LABELS = {
     "PERSON", "ORG", "GPE", "LOC", "FAC", "PRODUCT", "EVENT", "NORP", "WORK_OF_ART",
+    "PER", "MISC",
 }
 _NUMERIC_LABELS = {"CARDINAL", "MONEY", "PERCENT", "QUANTITY", "ORDINAL"}
 _CONTENT_POS = {"NOUN", "PROPN", "VERB", "ADJ", "ADV", "NUM"}
-_NEGATORS = {"no", "not", "never", "none", "nothing", "nobody", "neither", "nor",
-             "without", "n't"}
-#: DATE entities that name no calendar point. "Recently" surviving or not says
-#: nothing about whether a fact was kept.
-_RELATIVE_DATES = {"today", "yesterday", "tomorrow", "now", "later", "recently",
-                   "currently", "soon", "then", "earlier", "lately", "ago"}
-#: Verbs and adjectives that carry a negation in their meaning, so a rewrite
-#: can drop a `not` without changing the claim.
-_LEXICAL_NEGATORS = {"decline", "refuse", "fail", "deny", "lack", "absent",
-                     "unable", "reject", "omit", "avoid", "cease", "forgo",
-                     "withhold", "exclude", "miss"}
+# The word lists live in `languages`, one set per language: negators, the
+# relative dates that name no calendar point ("recently" surviving or not says
+# nothing about whether a fact was kept), the verbs that carry a negation in
+# their meaning so a rewrite can drop a `not` without changing the claim, and
+# the spelled-out numbers. The English ones are kept here under their old
+# names for callers that imported them.
+_EN = languages.get("en")
+_NEGATORS = set(_EN.negators)
+_RELATIVE_DATES = set(_EN.relative_dates)
+_LEXICAL_NEGATORS = set(_EN.lexical_negators)
+_WORD_NUMBERS = dict(_EN.word_numbers)
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _NUMERIC = re.compile(r"\d")
-
-_WORD_NUMBERS = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
-    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
-    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
-    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
-    "hundred": 100, "thousand": 1000, "million": 1_000_000, "billion": 1_000_000_000,
-}
 _SUFFIX_MULTIPLIERS = {"k": 1_000, "m": 1_000_000, "bn": 1_000_000_000,
                        "b": 1_000_000_000, "tn": 1_000_000_000_000}
 
@@ -122,12 +116,13 @@ class Fidelity:
 
 # --- normalisation ---------------------------------------------------------
 
-def _normalise_number(text: str) -> str:
+def _normalise_number(text: str, language=_EN) -> str:
     """One surface form for `two`, `2`, `$4.2M`, `4,200,000` and `twelve percent`.
 
     Works on a whole span rather than a token, because `$4.2M` reaches the
     parser as three tokens and the multiplier is the part that matters.
     """
+    numbers = language.word_numbers
     raw = text.strip().lower().replace(",", "")
     m = re.search(r"(\d+\.?\d*)\s*(bn|tn|[kmb])?\b", raw)
     if m:
@@ -137,12 +132,12 @@ def _normalise_number(text: str) -> str:
             value *= _SUFFIX_MULTIPLIERS[suffix]
         return str(value)
     # No digits: a spelled-out number, possibly with a multiplier word.
-    words = [w for w in re.split(r"[^a-z]+", raw) if w in _WORD_NUMBERS]
+    words = [w for w in languages.WORD_SPLIT.split(raw) if w in numbers]
     if not words:
         return raw
-    value = float(_WORD_NUMBERS[words[0]])
+    value = float(numbers[words[0]])
     for w in words[1:]:
-        mult = _WORD_NUMBERS[w]
+        mult = numbers[w]
         if mult >= 100:
             value *= mult
         else:
@@ -168,7 +163,7 @@ def _matches_derivation(lemma: str, known: set[str]) -> bool:
 
 # --- extraction ------------------------------------------------------------
 
-def _anchors(doc) -> list[Anchor]:
+def _anchors(doc, language=_EN) -> list[Anchor]:
     out: list[Anchor] = []
     seen: set[tuple[str, str]] = set()
 
@@ -191,7 +186,7 @@ def _anchors(doc) -> list[Anchor]:
             if tok.is_punct or tok.is_space:
                 continue
             low = tok.text.lower()
-            if low in _RELATIVE_DATES or tok.is_stop:
+            if low in language.relative_dates or tok.is_stop:
                 continue
             date_tokens.add(tok.i)
 
@@ -203,10 +198,10 @@ def _anchors(doc) -> list[Anchor]:
         if ent.label_ not in _NUMERIC_LABELS:
             continue
         text = ent.text.strip()
-        if not (_NUMERIC.search(text) or any(w in _WORD_NUMBERS
-                                             for w in re.split(r"[^a-z]+", text.lower()))):
+        if not (_NUMERIC.search(text) or any(w in language.word_numbers
+                                             for w in languages.WORD_SPLIT.split(text.lower()))):
             continue
-        add("number", _normalise_number(text), sent_index.get(ent.start, 0))
+        add("number", _normalise_number(text, language), sent_index.get(ent.start, 0))
         numeric_span_tokens.update(t.i for t in ent)
 
     for tok in doc:
@@ -221,9 +216,10 @@ def _anchors(doc) -> list[Anchor]:
             continue
         if tok.i in numeric_span_tokens:
             continue
-        numeric = tok.like_num or tok.tag_ == "CD" or tok.ent_type_ in _NUMERIC_LABELS
-        if numeric and (_NUMERIC.search(tok.text) or tok.text.lower() in _WORD_NUMBERS):
-            add("number", _normalise_number(tok.text), i)
+        numeric = (tok.like_num or tok.tag_ == "CD" or tok.pos_ == "NUM"
+                   or tok.ent_type_ in _NUMERIC_LABELS)
+        if numeric and (_NUMERIC.search(tok.text) or tok.text.lower() in language.word_numbers):
+            add("number", _normalise_number(tok.text, language), i)
 
     # Entities are token sets: a later mention that shortens `Meridian Foundry`
     # to `Meridian` still refers, so any surviving token counts as preserved.
@@ -250,10 +246,10 @@ def _entity_vocabulary(doc) -> set[str]:
     return {t.text.lower() for t in doc if not t.is_space and not t.is_punct}
 
 
-def _negation_count(doc) -> int:
+def _negation_count(doc, language=_EN) -> int:
     n = 0
     for tok in doc:
-        if tok.dep_ == "neg" or tok.text.lower() in _NEGATORS:
+        if tok.dep_ == "neg" or tok.text.lower() in language.negators:
             n += 1
     return n
 
@@ -274,8 +270,11 @@ def _sentence_lemma_sets(doc) -> list[set[str]]:
 
 def fidelity(source: str, output: str, gaps: list[str] | None = None,
              inferences: list[str] | None = None,
-             gap_sentences: dict | None = None) -> Fidelity:
+             gap_sentences: dict | None = None, lang: str | None = None) -> Fidelity:
     """Compare an output against its source. No model is consulted.
+
+    `lang` is the language both texts are in: `en`, `es` or `pt`, default
+    English. It picks the parser and the negator and number word lists.
 
     `gaps` and `inferences` are the rewrite's own report. They can excuse a
     drop, because reporting a gap instead of filling it is the correct
@@ -290,11 +289,12 @@ def fidelity(source: str, output: str, gaps: list[str] | None = None,
     gap_sentences = gap_sentences or {}
     notes: list[str] = []
 
-    src_doc = parse(source)
-    out_doc = parse(output)
+    language = languages.get(lang)
+    src_doc = parse(source, language.code)
+    out_doc = parse(output, language.code)
 
-    src_anchors = _anchors(src_doc)
-    out_anchors = _anchors(out_doc)
+    src_anchors = _anchors(src_doc, language)
+    out_anchors = _anchors(out_doc, language)
     out_vocab = _entity_vocabulary(out_doc)
     src_vocab = _entity_vocabulary(src_doc)
     out_by_kind = {k: {a.text for a in out_anchors if a.kind == k}
@@ -350,7 +350,7 @@ def fidelity(source: str, output: str, gaps: list[str] | None = None,
     measurable = len([s for s in src_sets if s])
     coverage = round(1 - len(uncovered) / measurable, 4) if measurable else 1.0
 
-    negations = (_negation_count(src_doc), _negation_count(out_doc))
+    negations = (_negation_count(src_doc, language), _negation_count(out_doc, language))
     neg_delta = abs(negations[0] - negations[1])
     # A restyle may carry a negation lexically -- `did not renew` becoming
     # `declined to renew` -- which drops the count without changing the claim.
@@ -359,7 +359,8 @@ def fidelity(source: str, output: str, gaps: list[str] | None = None,
     if neg_delta:
         src_low = {t.lemma_.lower() for t in src_doc}
         out_low = {t.lemma_.lower() for t in out_doc}
-        if (out_low | src_low) & _LEXICAL_NEGATORS - (out_low & src_low & _LEXICAL_NEGATORS):
+        lexical = language.lexical_negators
+        if (out_low | src_low) & lexical - (out_low & src_low & lexical):
             neg_excused = 1
     neg_penalised = max(0, neg_delta - neg_excused)
 

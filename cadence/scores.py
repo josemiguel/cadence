@@ -62,11 +62,12 @@ def score(text: str, profile: SyntacticProfile, source: str | None = None,
     nothing to be faithful to, and `fidelity` is left as None rather than
     filled with a number that would mean nothing.
     """
-    measured = divergence(profile, build_profile([text], name="candidate"))
+    lang = profile.language
+    measured = divergence(profile, build_profile([text], name="candidate", lang=lang))
     caveats = [VOICE_CAVEAT]
     fid = None
     if source is not None:
-        fid = fidelity(source, text, gaps=gaps, inferences=inferences)
+        fid = fidelity(source, text, gaps=gaps, inferences=inferences, lang=lang)
         caveats.append(FIDELITY_CAVEAT)
     return Scores(
         voice_similarity=measured["similarity"],

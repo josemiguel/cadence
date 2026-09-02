@@ -13,13 +13,15 @@ Importing this package does not load the spaCy model. The first call to
 `parse`, `analyze` or `build_profile` does.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .demo import DEMO_TEXT
 from .diagnostics import Analysis, Finding, Observation, analyze
 from .errors import CadenceError, MissingAPIKey, ModelNotInstalled
 from .fidelity import Anchor, Fidelity, fidelity
 from .generate import GenerationResult, compare, generate
+from .languages import LANGUAGES, Language
+from .languages import guess as guess_language
 from .profile import SyntacticProfile, build_profile, divergence, spec_text
 from .report import text_report
 from .rewrite import DEFAULT_MODEL, RewriteResult, render_trees, rewrite
@@ -35,6 +37,8 @@ __all__ = [
     "Fidelity",
     "Finding",
     "GenerationResult",
+    "LANGUAGES",
+    "Language",
     "MissingAPIKey",
     "ModelNotInstalled",
     "Observation",
@@ -48,6 +52,7 @@ __all__ = [
     "divergence",
     "fidelity",
     "generate",
+    "guess_language",
     "parse",
     "render_trees",
     "rewrite",

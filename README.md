@@ -29,11 +29,43 @@ own fabrication, so `fidelity.py` now checks it mechanically.
 
 ```bash
 pip install "cadence-writer[llm]"   # the import name is `cadence`
-cadence download-model
+cadence download-model              # English
+cadence download-model --lang all   # English, Spanish and Portuguese
 ```
 
-The spaCy model is a separate step because PyPI rejects packages that declare a
-dependency by URL, and the model is only distributed that way.
+The spaCy models are a separate step because PyPI rejects packages that declare a
+dependency by URL, and the models are only distributed that way.
+
+## Languages
+
+cadence measures English, Spanish and Portuguese. A profile is measured in one
+language and carries it, so a restyle against a Spanish profile is told to
+write Spanish and its output is parsed as Spanish. Every command takes
+`--lang en|es|pt`, every function takes `lang=`, and the MCP tools take
+`language`. The default is English.
+
+```bash
+cadence profile cartas/*.txt --lang es
+cadence restyle borrador.txt --corpus cartas/*.txt --lang es
+```
+
+```python
+profile = cadence.build_profile(cartas, name="yo", lang="es")
+result = cadence.generate(borrador, mode="profile_verify", profile=profile,
+                          task="restyle")          # writes Spanish: the profile says so
+cadence.guess_language(text)                       # "en", "es" or "pt", by function words
+```
+
+The measurements are the same in all three: finite clauses, embedding depth,
+subordination, coordination, what sits before the main verb, passives and
+their agents, function-word frequency. What differs is the parser. spaCy's
+Spanish and Portuguese models label dependencies by the Universal Dependencies
+scheme and mark finiteness in morphology rather than in a Penn tag, and
+`languages.py` rewrites those into the labels the counters read, so no counter
+knows which language it is counting. The fidelity check has each language's
+negators, relative dates and spelled-out numbers. The remove-slop phrase lists
+and the note-register parse repairs are English and stay out of the way in the
+other two.
 
 ## Use
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import languages
 from .fidelity import fidelity as check_fidelity
 from .llm import add_usage, call_text, resolve_client
 from .profile import SyntacticProfile, build_profile, divergence, spec_text
@@ -112,6 +113,11 @@ E. CHANGE SHAPE BY MERGING AND SPLITTING, NEVER BY ADDING. If the target calls
    ones, split. A sentence that reaches the target length by saying something
    the source did not say is wrong, however well it scores."""
 
+LANGUAGE_RULE = """
+
+OUTPUT LANGUAGE: {name}. The specification was measured on {name} prose and the
+text you are given is {name}. Write only in {name}. Translate nothing."""
+
 
 # Extended thinking is on by default and its tokens count against max_tokens, so
 # the budget has to cover reasoning as well as prose. A verify-loop correction
@@ -121,18 +127,18 @@ E. CHANGE SHAPE BY MERGING AND SPLITTING, NEVER BY ADDING. If the target calls
 GENERATION_MAX_TOKENS = 16384
 
 
-def _token_count(text: str) -> int:
+def _token_count(text: str, lang: str | None = None) -> int:
     """Content tokens, counted the same way the profile counts them."""
     from .syntax import parse
-    return len([t for t in parse(text) if not t.is_space and not t.is_punct])
+    return len([t for t in parse(text, lang) if not t.is_space and not t.is_punct])
 
 
-def _sentence_count(text: str) -> int:
+def _sentence_count(text: str, lang: str | None = None) -> int:
     from .syntax import parse
-    return sum(1 for s in parse(text).sents if s.text.strip())
+    return sum(1 for s in parse(text, lang).sents if s.text.strip())
 
 
-def _fidelity_of(brief: str, text: str, restyling: bool):
+def _fidelity_of(brief: str, text: str, restyling: bool, lang: str | None = None):
     """Content fidelity, when there is a source to be faithful to.
 
     Composing from a topic has no source, so there is nothing to check and a
@@ -140,20 +146,20 @@ def _fidelity_of(brief: str, text: str, restyling: bool):
     """
     if not restyling or not text.strip():
         return None
-    return check_fidelity(brief, text)
+    return check_fidelity(brief, text, lang=lang)
 
 
 def _measure(text: str, target: SyntacticProfile) -> dict:
     """Divergence of one generated passage from the target profile."""
-    candidate = build_profile([text], name="candidate")
+    candidate = build_profile([text], name="candidate", lang=target.language)
     return divergence(target, candidate)
 
 
-def _length_note(source_tokens: int, text: str) -> str:
+def _length_note(source_tokens: int, text: str, lang: str | None = None) -> str:
     """Correction line when the output has drifted from the source length."""
     if not source_tokens:
         return ""
-    got = _token_count(text)
+    got = _token_count(text, lang)
     ratio = got / source_tokens
     if abs(ratio - 1.0) <= LENGTH_TOLERANCE:
         return ""
@@ -171,7 +177,7 @@ def _length_note(source_tokens: int, text: str) -> str:
 
 def _feedback(target: SyntacticProfile, result: dict, text: str, top: int = 6) -> str:
     """Turn measured divergence into correction instructions with direction."""
-    candidate = build_profile([text], name="candidate")
+    candidate = build_profile([text], name="candidate", lang=target.language)
     lines = []
     stat_fields = {
         "sentence_length": (target.sentence_length, candidate.sentence_length,
@@ -216,17 +222,21 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
              samples: list[str] | None = None, model: str = DEFAULT_MODEL,
              iterations: int = 2, max_tokens: int = GENERATION_MAX_TOKENS,
              task: str = "restyle", *, api_key: str | None = None,
-             client=None) -> GenerationResult:
+             client=None, lang: str | None = None) -> GenerationResult:
+    """Write against a profile. `lang` defaults to the profile's language, then English."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
     if task not in TASKS:
         raise ValueError(f"task must be one of {TASKS}")
 
+    language = languages.get(lang or (profile.language if profile is not None else None))
+    code = language.code
     restyling = task == "restyle"
-    source_tokens = _token_count(brief) if restyling else 0
+    source_tokens = _token_count(brief, code) if restyling else 0
     from .slop import BANNED_PROFILE_FEATURES, PROMPT_RULES
 
-    system = SYSTEM + (RESTYLE_RULES if restyling else "") + PROMPT_RULES
+    system = (SYSTEM + (RESTYLE_RULES if restyling else "") + PROMPT_RULES
+              + LANGUAGE_RULE.format(name=language.name))
     # Where the profile measured something remove-slop bans, the ban wins and the
     # override is stated rather than left for the reader to notice.
     conflicts = []
@@ -240,7 +250,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
     if restyling:
         lo = int(source_tokens * (1 - LENGTH_TOLERANCE))
         hi = int(source_tokens * (1 + LENGTH_TOLERANCE))
-        source_sentences = _sentence_count(brief)
+        source_sentences = _sentence_count(brief, code)
         instruction = (
             f"TEXT TO RESTYLE ({source_tokens} content tokens in {source_sentences} "
             f"sentences):\n\n{brief}\n\n"
@@ -271,9 +281,9 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
         return GenerationResult(
             mode="tone", model=model, text=text,
             similarity=result.get("similarity", 0.0), divergence=result,
-            task=task, source_tokens=source_tokens, output_tokens=_token_count(text),
+            task=task, source_tokens=source_tokens, output_tokens=_token_count(text, code),
             usage=resp.usage, latency_s=resp.latency_s,
-            fidelity=_fidelity_of(brief, text, restyling),
+            fidelity=_fidelity_of(brief, text, restyling, code),
             note="Baseline: raw samples, no measurement. Content of the samples is "
                  "visible to the model and can leak into the output."
                  + ("  Overridden by remove-slop: " + "; ".join(conflicts) if conflicts else ""),
@@ -290,7 +300,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
     resp = call_text(client, model, system, base_prompt, max_tokens)
     text = resp.text
     result = _measure(text, profile)
-    fid = _fidelity_of(brief, text, restyling)
+    fid = _fidelity_of(brief, text, restyling, code)
     attempts = [Attempt(1, text, result["similarity"],
                         list(result["by_feature"].items())[:4],
                         usage=resp.usage, latency_s=resp.latency_s, fidelity=fid)]
@@ -299,7 +309,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
         return GenerationResult(
             mode="profile", model=model, text=text,
             similarity=result["similarity"], divergence=result, attempts=attempts,
-            task=task, source_tokens=source_tokens, output_tokens=_token_count(text),
+            task=task, source_tokens=source_tokens, output_tokens=_token_count(text, code),
             usage=resp.usage, latency_s=resp.latency_s, fidelity=fid,
             note="Spec only -- the model never saw the samples, so nothing of their "
                  "content could leak. Any style match is carried by structure alone."
@@ -317,7 +327,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
             return False
         if not source_tokens:
             return True
-        return abs(_token_count(candidate_text) / source_tokens - 1.0) <= LENGTH_TOLERANCE
+        return abs(_token_count(candidate_text, code) / source_tokens - 1.0) <= LENGTH_TOLERANCE
 
     failures = []
     for i in range(2, iterations + 2):
@@ -328,7 +338,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
         corrections = _feedback(profile, result, text)
         # Length is the one deviation the structural feedback cannot express,
         # and it is the one that makes every other number meaningless.
-        length_note = _length_note(source_tokens, text)
+        length_note = _length_note(source_tokens, text, code)
         if length_note:
             corrections = f"{length_note}\n{corrections}"
         prompt = (
@@ -347,7 +357,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
             resp = call_text(client, model, system, prompt, max_tokens)
             new_text = resp.text
             new_result = _measure(new_text, profile)
-            new_fid = _fidelity_of(brief, new_text, restyling)
+            new_fid = _fidelity_of(brief, new_text, restyling, code)
         except Exception as exc:
             failures.append(f"iteration {i}: {exc}")
             continue
@@ -368,7 +378,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
         scored = [a for a in attempts if a.fidelity is not None]
         if scored:
             best = max(scored, key=lambda a: (a.fidelity.score,
-                                              -abs(_token_count(a.text) / source_tokens - 1.0)
+                                              -abs(_token_count(a.text, code) / source_tokens - 1.0)
                                               if source_tokens else 0.0))
             if best.text != text:
                 text, fid = best.text, best.fidelity
@@ -377,7 +387,7 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
     return GenerationResult(
         mode="profile_verify", model=model, text=text,
         similarity=result["similarity"], divergence=result, attempts=attempts,
-        task=task, source_tokens=source_tokens, output_tokens=_token_count(text),
+        task=task, source_tokens=source_tokens, output_tokens=_token_count(text, code),
         usage=add_usage(*(a.usage for a in attempts)),
         latency_s=round(sum(a.latency_s for a in attempts), 3),
         fidelity=fid,
@@ -393,14 +403,14 @@ def generate(brief: str, mode: str = "profile", profile: SyntacticProfile | None
 def compare(brief: str, profile: SyntacticProfile, samples: list[str],
             model: str = DEFAULT_MODEL, iterations: int = 2,
             task: str = "restyle", *, api_key: str | None = None,
-            client=None) -> list[GenerationResult]:
+            client=None, lang: str | None = None) -> list[GenerationResult]:
     """Run all three modes on one input so they can be read blind."""
     out = []
     for mode in MODES:
         try:
             out.append(generate(brief, mode=mode, profile=profile, samples=samples,
                                 model=model, iterations=iterations, task=task,
-                                api_key=api_key, client=client))
+                                api_key=api_key, client=client, lang=lang))
         except Exception as exc:  # one mode failing must not lose the others
             out.append(GenerationResult(mode=mode, model=model, text="",
                                         similarity=0.0, note=f"failed: {exc}"))

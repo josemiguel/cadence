@@ -27,9 +27,10 @@ import statistics
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 
+from . import languages
+from .languages import is_finite
 from .syntax import dep_depth, parse
 
-_FINITE_TAGS = {"VBZ", "VBD", "VBP", "MD"}
 _SUBORDINATE_DEPS = {"advcl", "ccomp", "xcomp", "relcl", "acl", "csubj", "pcomp"}
 _CLOSED_CLASS = {"DET", "ADP", "PRON", "CCONJ", "SCONJ", "AUX", "PART"}
 _PUNCT_PREDICATION = {":", ";", "—", "--", "–"}
@@ -84,6 +85,8 @@ class SyntacticProfile:
     pos_mix: dict = field(default_factory=dict)
     function_words: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
+    #: The language the corpus was measured in, and so the one to write in.
+    language: str = languages.DEFAULT
 
     def as_dict(self):
         return asdict(self)
@@ -91,7 +94,7 @@ class SyntacticProfile:
 
 def _sentence_features(sent):
     toks = [t for t in sent if not t.is_space and not t.is_punct]
-    finite = [t for t in sent if t.tag_ in _FINITE_TAGS]
+    finite = [t for t in sent if is_finite(t)]
     subord = [t for t in sent if t.dep_ in _SUBORDINATE_DEPS]
     coord = [t for t in sent if t.dep_ == "conj"]
     root = sent.root
@@ -113,9 +116,15 @@ def _sentence_features(sent):
     )
 
 
-def build_profile(texts: list[str], name: str = "corpus") -> SyntacticProfile:
-    """Measure a corpus. Pass several documents; one sentence is not a style."""
-    docs = [parse(t) for t in texts if t and t.strip()]
+def build_profile(texts: list[str], name: str = "corpus",
+                  lang: str | None = None) -> SyntacticProfile:
+    """Measure a corpus. Pass several documents; one sentence is not a style.
+
+    `lang` is `en`, `es` or `pt`, and defaults to English. Every text in one
+    corpus is parsed in that language; a mixed corpus is two corpora.
+    """
+    code = languages.get(lang).code
+    docs = [parse(t, code) for t in texts if t and t.strip()]
     if not docs:
         raise ValueError("No usable text in the corpus.")
 
@@ -189,6 +198,7 @@ def build_profile(texts: list[str], name: str = "corpus") -> SyntacticProfile:
         pos_mix=pos_mix,
         function_words=function_words,
         warnings=warnings,
+        language=code,
     )
 
 
@@ -273,9 +283,12 @@ def _variance_directive(p: SyntacticProfile) -> str:
 
 def spec_text(p: SyntacticProfile) -> str:
     """The profile as a target spec a generator can aim at."""
+    language = languages.get(p.language)
     lines = [
         f"SYNTACTIC TARGET PROFILE ({p.name}: {p.documents} documents, "
         f"{p.sentences} sentences, {p.tokens} tokens)",
+        f"LANGUAGE: {language.name}. The corpus is {language.name} prose and the "
+        f"output must be {language.name}.",
         "",
         "Hit the RANGES, not the means. Varying within the range is required --",
         "landing on the mean every sentence is the main way this goes wrong.",

@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import repair
+from .languages import is_finite, is_participle
 from .syntax import (
     chunks,
     deepest_path,
@@ -24,7 +25,6 @@ from .syntax import (
     parse,
 )
 
-_FINITE_TAGS = {"VBZ", "VBD", "VBP", "MD"}
 _NOMINAL = {"NOUN", "PROPN", "PRON", "NUM"}
 
 # Nouns that package a claim so it can be referenced without being asserted.
@@ -152,7 +152,7 @@ def _agentless_passives(sent, idx):
     for tok in sent:
         is_full = any(c.dep_ == "auxpass" for c in tok.children)
         is_reduced = (
-            tok.tag_ == "VBN"
+            is_participle(tok)
             and tok.dep_ in {"acl", "relcl", "advcl", "pcomp"}
             and not any(c.dep_ in {"nsubj", "auxpass"} for c in tok.children)
         )
@@ -173,7 +173,7 @@ def _agentless_passives(sent, idx):
 
 def _null_subjects(sent, idx):
     for tok in sent:
-        if tok.tag_ not in _FINITE_TAGS:
+        if not is_finite(tok):
             continue
         # A `conj` verb inherits its subject from the first coordinate; that is
         # ordinary VP coordination, not a dropped subject.
@@ -541,7 +541,7 @@ def _observations(doc) -> list[Observation]:
             "is meant. Not a defect.",
         ))
     passives = [t for t in doc if any(c.dep_ == "auxpass" for c in t.children)]
-    finite = [t for t in doc if t.tag_ in _FINITE_TAGS]
+    finite = [t for t in doc if is_finite(t)]
     if passives and finite:
         out.append(Observation(
             "PASSIVE_RATIO", f"{len(passives)} passive(s) against {len(finite)} finite verb(s)",
@@ -554,15 +554,20 @@ def _observations(doc) -> list[Observation]:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def analyze(text: str) -> Analysis:
+def analyze(text: str, lang: str | None = None) -> Analysis:
     """Parse, repair, and run every detector: structural and remove-slop alike.
+
+    `lang` picks the parser (`en`, `es`, `pt`; default English). The structural
+    detectors read dependency labels and work in all three. The remove-slop
+    phrase lists and the English-specific detectors (container nouns, `which`,
+    ambiguous subordinators) are written for English and stay quiet elsewhere.
 
     The two are one pass on purpose. A dash used as a copula is a structural
     finding (PUNCT_COPULA) and a slop finding (SLOP_DASH) simultaneously, and
     splitting them into separate modes would have made the caller reconcile two
     reports of the same sentence.
     """
-    doc = parse(text)
+    doc = parse(text, lang)
     sents, findings = [], []
     for idx, sent in enumerate(doc.sents, start=1):
         level, reasons = repair.confidence(sent)

@@ -1,6 +1,7 @@
 """Syntactic layer: PTB tags, dependency trees, projected constituency trees.
 
-The dependency layer is a real parse (spaCy, en_core_web_sm). The constituency
+The dependency layer is a real parse (spaCy: en_core_web_sm, es_core_news_sm or
+pt_core_news_sm, chosen by language; see `languages`). The constituency
 layer is a HEAD PROJECTION of that parse, not a native PTB parse -- every
 bracketing here is derived from dependency structure by projecting each head
 over its dependents. It reproduces PTB conventions where they follow from
@@ -14,11 +15,14 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field
 
-MODEL = "en_core_web_sm"
+from . import languages
+from .languages import is_finite
+
+#: The English model. Kept for callers that imported it; `languages` has the rest.
+MODEL = languages.get("en").model
 
 # Dependency labels that make their head a clause rather than a phrase.
 _SUBJECT_DEPS = {"nsubj", "nsubjpass", "csubj", "csubjpass", "expl"}
-_FINITE_TAGS = {"VBZ", "VBD", "VBP", "MD"}
 
 # dep_ -> PTB function tag
 _FUNCTION_TAGS = {
@@ -34,32 +38,37 @@ _FUNCTION_TAGS = {
 _TEMPORAL_ENTS = {"DATE", "TIME"}
 
 
-@functools.lru_cache(maxsize=1)
-def _load():
+@functools.cache
+def _load(code: str = languages.DEFAULT):
+    """The pipeline for one language, loaded once per process."""
     import spacy
 
     from . import repair
 
+    lang = languages.get(code)
     try:
-        nlp = spacy.load(MODEL)
+        nlp = spacy.load(lang.model)
         repair.install_tokenizer_rules(nlp)
         return nlp
     except OSError as exc:  # pragma: no cover - install-time failure
         from .errors import ModelNotInstalled
 
         raise ModelNotInstalled(
-            f"spaCy model {MODEL!r} is missing. Install it with:\n"
-            f"    cadence download-model\n"
+            f"spaCy model {lang.model!r} ({lang.name}) is missing. Install it with:\n"
+            f"    cadence download-model --lang {lang.code}\n"
             f"or, equivalently:\n"
-            f"    python -m spacy download {MODEL}"
+            f"    python -m spacy download {lang.model}"
         ) from exc
 
 
-def parse(text: str):
-    """Parse text, apply note-register repairs, return the Doc."""
+def parse(text: str, lang: str | None = None):
+    """Parse text in `lang` (default English), normalise its labels, repair, return the Doc."""
     from . import repair
 
-    return repair.apply(_load()(text.strip()))
+    language = languages.get(lang)
+    doc = _load(language.code)(text.strip())
+    languages.normalise(doc, language)
+    return repair.apply(doc)
 
 
 # --------------------------------------------------------------------------
@@ -122,7 +131,7 @@ def _dep_branch(tok, prefix: str, last: bool, lines: list[str], show_punct: bool
 # internal to one NP; counting them as depth inflates the metric on any
 # coordinated name (`with Ann Lee and Bob Ray` scored three levels
 # of "nesting" that a reader never has to hold open).
-_NON_EMBEDDING_DEPS = {"conj", "compound", "flat", "appos", "cc", "punct", "dep"}
+_NON_EMBEDDING_DEPS = {"conj", "compound", "flat", "fixed", "appos", "cc", "punct", "dep"}
 
 
 def _arc_cost(tok) -> int:
@@ -207,7 +216,7 @@ def _phrase_label(tok) -> str:
         return "INTJ"
     if pos in {"VERB", "AUX"}:
         has_subject = any(c.dep_ in _SUBJECT_DEPS for c in tok.children)
-        if has_subject and tok.tag_ in _FINITE_TAGS:
+        if has_subject and is_finite(tok):
             return "S"
         if has_subject:
             return "S"
@@ -319,4 +328,4 @@ def chunks(sent) -> list[tuple[str, list]]:
 
 
 def has_finite_verb(tokens) -> bool:
-    return any(t.tag_ in _FINITE_TAGS for t in tokens)
+    return any(is_finite(t) for t in tokens)
